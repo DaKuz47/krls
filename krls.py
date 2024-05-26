@@ -18,12 +18,10 @@ class ALDResult:
 class KRLSModel:
     def __init__(
         self,
-        c: float,
         v: float,
         kernel: type[Kernel],
         kernel_params: dict[str, Any] | None = None
     ) -> None:
-        self.c = c
         self.v = v
         self.kernel = kernel(**(kernel_params or {}))
         self.need_init_data = True
