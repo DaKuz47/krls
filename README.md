@@ -1,5 +1,5 @@
 # KRLS
-## KRLS algorithm realization
+## KRLS algorithm implementation
 
-Realization based on the articale "The kernel recursive least-squares algorithm"
+Implementation based on the articale "The kernel recursive least-squares algorithm"
 by Yaakov Engel, Shie Mannor, Ron Meir
