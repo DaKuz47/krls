@@ -1,11 +1,12 @@
 from dataclasses import dataclass
 
-from typing import Any
+from typing import Any, Self
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.spatial import distance
 
-from kernels import Kernel
+from kernels import Kernel, RBF
 
 
 @dataclass
@@ -14,16 +15,34 @@ class ALDResult:
     a_coeffs: NDArray
     delta: float
 
+count = 0
+min_count = float('inf')
 
 class KRLSModel:
+    """
+        Регрессионая модель, построенна на базе алгоритма KRLS
+
+        Параметры
+        ----------
+        v: float
+            Допустимая погрешность при аппроксимации линейной комбинацией
+            входящих векторов
+
+        kernel: type[Kernel]
+            Класс ядра
+        
+        kernel_params: dict
+            Набор параметров для инициализации ядра
+        
+    """
     def __init__(
         self,
-        v: float,
-        kernel: type[Kernel],
+        v: float = 0.3,
+        kernel: type[Kernel] = RBF,
         kernel_params: dict[str, Any] | None = None
     ) -> None:
         self.v = v
-        self.kernel = kernel(**(kernel_params or {}))
+        self.kernel = kernel(**kernel_params)
         self.need_init_data = True
         self.inv_kernel_mtx = None
         self.p_mtx = None
@@ -34,6 +53,7 @@ class KRLSModel:
         assert self.need_init_data
         assert x.ndim == 1
 
+        self.clear_data()
         k00 = self.kernel(x, x)
         self.inv_kernel_mtx = np.array([[1 / k00]])
         self.p_mtx = np.array([[1]])
@@ -49,7 +69,7 @@ class KRLSModel:
         self.need_init_data = True
 
     def kernel_row(self, x: NDArray) -> NDArray:
-        return np.array([self.kernel(sv, x) for sv in self.dictionary])
+        return np.array([self.kernel(x, sv) for sv in self.dictionary])
 
     def ald_test(self, x: NDArray) -> ALDResult:
         kernel_row = self.kernel_row(x)
@@ -63,7 +83,18 @@ class KRLSModel:
             delta=delta,
         )
 
-    def fit(self, x: NDArray, y: NDArray):
+    def fit(self, x: NDArray, y: NDArray) -> Self:
+        """
+            Обучение модели.
+
+            Параметры
+            ---------
+            x: numpy array
+                Список объектов
+            y: numpy array
+                Список откликов соответсвующих объектов
+        """
+
         assert len(x) > 0, 'Empty data'
 
         if y.ndim > 1:
@@ -86,15 +117,15 @@ class KRLSModel:
 
             if ald_result.is_linear_dep:
                 q = (self.p_mtx @ a_cfs) / (1 + a_cfs @ self.p_mtx @ a_cfs)
-                self.p_mtx = self.p_mtx - (q @ a_cfs) * self.p_mtx
+                self.p_mtx = self.p_mtx - (q[:, np.newaxis] @ a_cfs[np.newaxis, :]) * self.p_mtx
 
-                curr_alpha = curr_alpha + self.inv_kernel_mtx @ (
-                    q * (curr_y - kernel_row @ curr_alpha)
+                curr_alpha = curr_alpha + (self.inv_kernel_mtx @ q) * (
+                    curr_y - kernel_row @ curr_alpha
                 )
             else:
                 top_inv_k_part = np.hstack(
                     (
-                        ald_result.delta * self.inv_kernel_mtx + a_cfs @ a_cfs,
+                        ald_result.delta * self.inv_kernel_mtx + a_cfs[:, np.newaxis] @ a_cfs[np.newaxis, :],
                         -a_cfs[:, np.newaxis]
                     )
                 )
@@ -106,7 +137,7 @@ class KRLSModel:
                 )
 
                 self.p_mtx = np.vstack((
-                    np.hstack((self.p_mtx, np.zeros(self.p_mtx.shape[0])[np.newaxis, :])),
+                    np.hstack((self.p_mtx, np.zeros(self.p_mtx.shape[0])[:, np.newaxis])),
                     np.append(np.zeros(self.p_mtx.shape[1]), 1)
                 ))
 
@@ -119,9 +150,25 @@ class KRLSModel:
                 self.dictionary.append(curr_x)
 
         self.dual_coefs = curr_alpha
+        self.need_init_data = True
+
+        return self
 
     def predict(self, x: NDArray):
+        """
+            'Инференс' модели
+        """
+
         return np.array([
             self.dual_coefs @ self.kernel_row(x_outer)
             for x_outer in x
         ])
+
+    def score(self, x: NDArray, y: NDArray):
+        """
+            Среднекватричная ошибка
+        """
+
+        res = self.predict(x)
+
+        return -sum((res_i - y_i) ** 2 for res_i, y_i in zip(res, y)) / x.shape[0]
